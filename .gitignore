@@ -1,0 +1,15 @@
+# env files — never commit these
+.env
+.env.local
+.env.production
+.env*.local
+
+# dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# misc
+.DS_Store
