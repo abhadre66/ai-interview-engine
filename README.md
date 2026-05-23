@@ -1,12 +1,12 @@
 # AI Interview Engine
 
-> An AI-powered interview platform that conducts real voice interviews, asks intelligent follow-up questions, and gives recruiters instant transcripts and scores — without a human interviewer in the room.
+> An AI-powered interview platform that conducts real voice interviews, asks intelligent follow-up questions based on the candidate's resume, and gives recruiters instant transcripts and scores — without a human interviewer in the room.
 
 ---
 
 ## What It Does
 
-A recruiter creates an interview in 30 seconds. The candidate gets a link. They talk to Alex — an AI interviewer that listens, follows up on what they actually said, and adapts questions based on their resume. When it's done, the recruiter gets a full transcript and an AI-generated score card.
+A recruiter creates an interview in 30 seconds — just a job title and candidate email. The candidate gets a link, uploads their resume, and talks to Alex — an AI interviewer that listens, follows up on what they actually said, and drills into their specific projects and skills. When it's done, the recruiter gets a full transcript and an AI-generated score card.
 
 No scheduling. No bias from tired interviewers. No waiting a week for feedback.
 
@@ -16,12 +16,15 @@ No scheduling. No bias from tired interviewers. No waiting a week for feedback.
 
 ```
 Recruiter logs in
-  → fills in job title + description
+  → fills in job title + candidate email
   → gets a shareable link
 
 Candidate opens the link
+  → uploads their resume (optional)
+  → Alex greets and asks "tell me about yourself"
+  → Alex cross-references their answer with the resume
+  → asks targeted follow-ups about specific projects and skills
   → speaks their answers (or types)
-  → Alex asks intelligent follow-ups in real time
   → interview ends in ~10 minutes
 
 Recruiter sees
@@ -39,10 +42,11 @@ Recruiter sees
 | Frontend | Next.js 15 (App Router) |
 | Backend | Express.js |
 | Database + Auth | Supabase (Postgres + Magic Link) |
-| AI Interviewer | Claude Sonnet 4.6 (`claude-sonnet-4-6`) |
+| AI Interviewer | Claude Sonnet 4.6 |
 | Resume Parsing | Claude Haiku 4.5 |
 | Speech-to-Text | Deepgram Nova-2 |
-| Text-to-Speech | ElevenLabs |
+| Text-to-Speech | Deepgram Aura (`aura-orion-en`) |
+| PDF Extraction | pdf-parse v2 |
 | Styling | Tailwind CSS |
 | Frontend Deploy | Vercel |
 | Backend Deploy | Railway |
@@ -58,8 +62,12 @@ ai-interview-engine/
 │   │   ├── login/                     # Magic link auth
 │   │   ├── recruiter/
 │   │   │   ├── dashboard/             # Interview list
-│   │   │   └── create/                # Create new interview
+│   │   │   └── create/                # Create new interview (title + email)
 │   │   └── interview/[sessionId]/     # Candidate interview room
+│   ├── components/
+│   │   └── interview/
+│   │       ├── VoiceRecorder.tsx      # Mic capture + silence detection
+│   │       └── AudioPlayer.tsx        # Base64 audio → auto-play
 │   ├── lib/
 │   │   ├── api.ts                     # Typed backend client
 │   │   └── supabase/                  # Supabase browser + server clients
@@ -70,10 +78,14 @@ ai-interview-engine/
 │       ├── lib/
 │       │   ├── claude.ts              # Interview chain (Claude API)
 │       │   ├── prompts.ts             # System prompt builder
+│       │   ├── deepgram.ts            # STT + TTS via Deepgram
+│       │   ├── elevenlabs.ts          # TTS (Deepgram Aura under the hood)
+│       │   ├── resumeParser.ts        # PDF extraction + Haiku summarization
 │       │   └── supabase.ts            # Supabase service role client
 │       └── routes/
-│           ├── interview.ts           # /start /respond /end /create
-│           └── recruiter.ts           # /interviews list
+│           ├── interview.ts           # /start /respond /respond-voice /end
+│           ├── resume.ts              # /parse — PDF → summary → DB
+│           └── recruiter.ts          # /interviews list
 │
 ├── .env                               # Single env file for both projects
 └── Pipeline.md                        # Full architecture + build roadmap
@@ -88,13 +100,12 @@ ai-interview-engine/
 - Node.js 20+
 - A [Supabase](https://supabase.com) project
 - An [Anthropic](https://console.anthropic.com) API key
-- A [Deepgram](https://deepgram.com) API key *(Phase 3)*
-- An [ElevenLabs](https://elevenlabs.io) API key *(Phase 3)*
+- A [Deepgram](https://deepgram.com) API key
 
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/your-username/ai-interview-engine.git
+git clone https://github.com/abhadre66/ai-interview-engine.git
 cd ai-interview-engine
 ```
 
@@ -113,11 +124,8 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 # Anthropic
 ANTHROPIC_API_KEY=your_anthropic_key
 
-# Deepgram
+# Deepgram (STT + TTS)
 DEEPGRAM_API_KEY=your_deepgram_key
-
-# ElevenLabs
-ELEVENLABS_API_KEY=your_elevenlabs_key
 
 # Backend
 PORT=3001
@@ -137,7 +145,7 @@ cd ../ai-interview-engine-api && npm install
 
 ### 4. Set up Supabase
 
-Run these tables in your Supabase SQL editor:
+Run these in your Supabase SQL editor:
 
 ```sql
 create table users (
@@ -152,7 +160,6 @@ create table interviews (
   recruiter_id uuid references users(id),
   candidate_email text not null,
   job_title text not null,
-  job_description text not null,
   resume_text text,
   status text default 'pending',
   score int,
@@ -174,12 +181,12 @@ create table interview_turns (
 create table resume_cache (
   id uuid primary key default gen_random_uuid(),
   file_hash text unique not null,
-  parsed_json jsonb not null,
+  parsed_json text not null,
   created_at timestamptz default now()
 );
 ```
 
-Also go to **Supabase → Authentication → URL Configuration** and add:
+Enable Row Level Security on all tables. Go to **Supabase → Authentication → URL Configuration** and add:
 ```
 http://localhost:3000/auth/callback
 ```
@@ -198,14 +205,49 @@ Open `http://localhost:3000`
 
 ---
 
+## How the Interview Works
+
+### Voice pipeline (per turn)
+```
+Candidate speaks → MediaRecorder captures audio blob
+  → POST /api/interview/respond-voice
+  → Deepgram Nova-2 STT (~1s)
+  → Claude Sonnet 4.6 generates next question (~2s)
+  → Deepgram Aura TTS → mp3 audio (~1s)
+  → Browser plays response
+Total latency: ~4–5 seconds
+```
+
+### Resume pipeline (once per session)
+```
+Candidate uploads PDF
+  → MD5 hash checked against resume_cache table
+  → Cache miss: pdf-parse v2 extracts text → Claude Haiku summarizes (~300 tokens)
+  → Summary saved to interviews.resume_text + resume_cache
+  → All Claude calls receive resume summary in system prompt
+```
+
+### Interview flow (8 turns)
+```
+Turn 1:   Alex greets + "Tell me about yourself"
+Turn 2:   Cross-references answer with resume — asks about a specific detail
+Turn 3:   Asks about a specific project (stack, contribution, outcome)
+Turn 4:   Digs into a technical challenge on that project
+Turn 5:   Pivots to a different project or side project
+Turns 6–7: Behavioral questions (STAR format)
+Turn 8:   Closing — candidate asks a question, Alex wraps up
+```
+
+---
+
 ## Build Roadmap
 
 | Phase | Feature | Status |
 |---|---|---|
 | 1 | Auth + Recruiter Dashboard | ✅ Done |
 | 2 | AI Text Interview (Claude) | ✅ Done |
-| 3 | Voice Interview (Deepgram + ElevenLabs) | 🔨 In Progress |
-| 4 | Resume-Aware Questions | ⏳ Upcoming |
+| 3 | Voice Interview (Deepgram STT + TTS) | ✅ Done |
+| 4 | Resume-Aware Questions | ✅ Done |
 | 5 | Recruiter Transcript View | ⏳ Upcoming |
 | 6 | AI Scoring | ⏳ Upcoming |
 | 7 | Deploy + Polish | ⏳ Upcoming |
@@ -220,9 +262,8 @@ Open `http://localhost:3000`
 | Railway | $0 → $5/mo |
 | Supabase | $0 |
 | Claude API | ~$10/mo |
-| Deepgram | ~$2/mo |
-| ElevenLabs | ~$5/mo |
-| **Total** | **~$17/mo** |
+| Deepgram (STT + TTS) | ~$3/mo |
+| **Total** | **~$13/mo** |
 
 ---
 
