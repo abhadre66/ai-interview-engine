@@ -21,7 +21,6 @@ export const api = {
     recruiter_id: string
     candidate_email: string
     job_title: string
-    job_description: string
   }) {
     return apiFetch<{ interview_id: string }>('/api/interview/create', {
       method: 'POST',
@@ -70,5 +69,49 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ interview_id }),
     })
+  },
+
+  async parseResume(interview_id: string, file: File): Promise<{ summary: string }> {
+    const formData = new FormData()
+    formData.append('interview_id', interview_id)
+    formData.append('resume', file)
+
+    const res = await fetch(`${API_URL}/api/resume/parse`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error((body as { error?: string }).error ?? `API error ${res.status}`)
+    }
+
+    return res.json()
+  },
+
+  async respondVoice(interview_id: string, audioBlob: Blob): Promise<{
+    question_text: string
+    audio_base64: string
+    candidate_transcript: string
+    turn_number: number
+    is_last_turn: boolean
+  }> {
+    const formData = new FormData()
+    formData.append('interview_id', interview_id)
+    formData.append('audio', audioBlob, 'recording.webm')
+
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
+    const res = await fetch(`${API_URL}/api/interview/respond-voice`, {
+      method: 'POST',
+      body: formData,
+      // No Content-Type header — browser sets it automatically with boundary for multipart
+    })
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error((body as { error?: string }).error ?? `API error ${res.status}`)
+    }
+
+    return res.json()
   },
 }

@@ -626,85 +626,117 @@ frontend/app/
 │   └── TranscriptDisplay.tsx
 ```
 
-**APIs needed:** Deepgram API, ElevenLabs API
+**APIs used:** Deepgram Nova-2 (STT), Deepgram Aura (TTS), Anthropic Claude Sonnet 4.6
 
-**Libraries:** None new — use fetch for both APIs (they have simple REST endpoints)
+**Note:** ElevenLabs dropped free API access — switched to Deepgram Aura TTS (`aura-orion-en`). Same Deepgram key, no extra cost.
+
+**Libraries:** multer (already installed) — handles multipart audio upload
 
 **Estimated time:** 20–24 hours (this is the hardest phase)
 
-**Common mistakes:**
-- Browser autoplay policies block audio — use a user gesture to initialize AudioContext
-- MediaRecorder codec differences between Chrome/Firefox/Safari
-- Not debouncing audio sends (send on silence detection, not timer)
-- Forgetting HTTPS requirement for MediaRecorder (use ngrok for local dev or test on Vercel)
+**Lessons learned:**
+- ElevenLabs free tier no longer supports API access — use Deepgram TTS instead
+- Use `eleven_turbo_v2_5` model if you do upgrade to ElevenLabs paid
+- MediaRecorder codec auto-detection needed — Chrome uses `audio/webm;codecs=opus`, Safari uses `audio/mp4`
+- VoiceRecorder state reset must use `useEffect`, not render-time `setState`
+- Global Express error handler required — Express 4 drops connections silently on async errors
+- Stale closure bug in `handleAudioComplete` — fixed with `isLastTurnRef`
 
 **Don't build yet:** Real-time streaming, video.
 
 #### Phase 3 Checklist
 
-- [ ] Deepgram API key added to Railway env vars
-- [ ] ElevenLabs API key added to Railway env vars, voice selected
-- [ ] `deepgram.ts` helper written on backend — transcribeAudio()
-- [ ] `elevenlabs.ts` helper written on backend — synthesizeSpeech()
-- [ ] `POST /api/interview/respond` on Railway handles full pipeline in one call
-- [ ] Single call flow verified: audio in → Deepgram → Claude → ElevenLabs → audio out
-- [ ] Response time under 8 seconds end-to-end (no timeout risk on Railway)
-- [ ] `VoiceRecorder` component on frontend captures mic via MediaRecorder API
-- [ ] Silence detection triggers send after 2 seconds of quiet
-- [ ] Audio blob sent directly to Railway backend URL as FormData
-- [ ] Audio returned to browser (base64 or presigned URL)
-- [ ] `AudioPlayer` auto-plays AI voice response
-- [ ] Visual "AI is speaking" indicator shown
-- [ ] Visual "Listening..." indicator when recording
-- [ ] Text fallback still works if mic is denied
-- [ ] Tested on HTTPS Vercel URL (not localhost)
-- [ ] Tested on Chrome
-- [ ] Tested on Safari
-- [ ] Full voice loop works: speak → AI responds in voice
+- [x] `src/lib/deepgram.ts` — `transcribeAudio(buffer, mimeType)` written
+- [x] `src/lib/elevenlabs.ts` — `synthesizeSpeech(text)` written (using Deepgram Aura TTS)
+- [x] `POST /api/interview/respond-voice` — full pipeline: audio in → Deepgram STT → Claude → Deepgram TTS → audio out
+- [x] All async route handlers wrapped with `asyncHandler` — errors reach global handler
+- [x] Global Express error handler added to `index.ts`
+- [x] Backend logs each pipeline step (`[voice] transcribing...`, `[voice] calling Claude...` etc.)
+- [x] `VoiceRecorder.tsx` — mic capture, MIME type auto-detection, 2.5s silence detection
+- [x] `AudioPlayer.tsx` — base64 → Blob → Object URL → auto-play, memory cleanup
+- [x] Voice/text mode toggle in interview room header
+- [x] `no_speech_detected` handled gracefully — mic re-enables, no turn wasted
+- [x] Stale closure fix — `isLastTurnRef` used in `handleAudioComplete`
+- [x] VoiceRecorder state reset fixed — `useEffect` instead of render-time setState
+- [x] Full voice loop tested: speak → Deepgram → Claude → Deepgram TTS → audio plays
+- [ ] Tested on Safari (requires HTTPS — test on Vercel deploy)
+- [ ] Tested on mobile Chrome
 
 ---
 
 ### Phase 4: Resume-Aware Interviews (Day 7)
 
-**Goal:** Upload a resume, AI tailors questions to candidate's background.
+**Goal:** Candidate uploads a resume before the interview. Claude Haiku extracts a plain-English summary. That summary is injected into the system prompt so Alex asks targeted follow-up questions based on the candidate's actual background.
 
-**Deliverables:** AI references candidate's actual experience. "Tell me about your time at [Company X]..."
+**Deliverables:** Pre-interview upload screen → resume parsed → Alex greets → asks "tell me about yourself" → uses resume to ask sharp project and skill follow-ups.
 
 **Folder structure additions:**
 ```
-app/api/resume/
-└── parse/route.ts
-lib/
-├── resume/
-│   └── parser.ts
-components/
-└── ResumeUpload.tsx
+ai-interview-engine-api/src/
+├── lib/
+│   └── resumeParser.ts         ← NEW: pdf extraction + Haiku summarization + cache logic
+└── routes/
+    └── resume.ts               ← NEW: POST /api/resume/parse
+
+frontend/
+├── app/interview/[sessionId]/page.tsx   ← UPDATED: pre-interview screen added
+└── lib/api.ts                           ← UPDATED: parseResume() added
 ```
 
-**APIs needed:** Claude API (for extraction), Supabase Storage (for file)
+**APIs used:** Claude Haiku 4.5 (resume extraction), Supabase (resume_cache + interviews.resume_text)
 
-**Libraries:** `pdf-parse`
+**Libraries:** `pdf-parse` v2, `@types/pdf-parse`
 
-**Estimated time:** 8–10 hours
+**Actual time taken:** ~4 hours
 
-**Common mistakes:**
-- pdf-parse struggles with scanned PDFs — add a fallback message ("Please upload a text-based PDF")
-- Passing full resume text to Claude on every turn is wasteful — extract a 300-token summary once
+**Decisions made:**
+- Job description field removed entirely from create interview form — job title + resume is sufficient context for Alex
+- Resume upload is optional — interview works without it, Alex just does a standard warm-up
+- Summary stored as plain English prose in `interviews.resume_text`, not JSON — slots directly into system prompt
+- PDF not stored in Supabase Storage — only the extracted text summary is kept (simpler, cheaper)
+- Resume cache keyed by MD5 hash in `resume_cache.file_hash` column (not `id` — that's a UUID)
 
-**Don't build yet:** LinkedIn scraping, ATS integration.
+**Lessons learned:**
+- `pdf-parse` v2 is a complete rewrite — class-based API now: `new PDFParse({ data: buffer })` then `.getText()`. The old `pdfParse(buffer)` call signature no longer works.
+- `resume_cache.id` is a UUID — writing an MD5 hash to it fails silently with no error surfaced to the route. Always check the actual column types before upserting.
+- Claude Haiku summary should be plain English prose, not JSON — it gets injected directly into the system prompt as the "Candidate Background" section.
+- First question being generic ("tell me about yourself") is correct and intentional — Alex uses the resume starting from turn 2 onward, not turn 1.
+- Without explicit "Hard Rules" in the system prompt, Claude gravitates toward asking about employers and job titles repeatedly — must explicitly ban "what did you do at [Company]" after the first mention and force turns 3–5 onto projects.
+
+**Interview flow (finalized):**
+```
+Turn 1:   Alex greets + "Tell me about yourself" (always)
+Turn 2:   Cross-references answer with resume — asks about a specific company, project, or skill
+Turn 3:   Asks about a specific PROJECT — what it does, stack, their contribution
+Turn 4:   Digs into a technical challenge on that project
+Turn 5:   Pivots to a DIFFERENT project or side project / technical skill
+Turns 6–7: Behavioral — STAR format
+Turn 8:   Closing — candidate asks a question, Alex wraps up
+```
+
+**Hard rules enforced in prompt:**
+- Turns 3–5 must be about projects and technical skills, NOT employers or job titles
+- "What did you do at [Company]" banned after the first mention
+- After a project question, Alex must go deeper on that project OR ask about a different one — never pivot back to experience
 
 #### Phase 4 Checklist
 
-- [ ] `pdf-parse` installed
-- [ ] Resume upload UI on pre-interview screen
-- [ ] PDF stored in Supabase Storage
-- [ ] Raw text extracted from PDF via pdf-parse
-- [ ] Claude Haiku extracts structured summary (≤300 tokens)
-- [ ] Summary stored in `resume_cache` table (keyed by file hash)
-- [ ] Resume context attached to interview session in DB
-- [ ] Resume summary injected into interview system prompt
-- [ ] AI references a specific resume detail in first 3 turns
-- [ ] Graceful error shown for scanned/unreadable PDFs
+- [x] `pdf-parse` v2 and `@types/pdf-parse` installed on backend
+- [x] `src/lib/resumeParser.ts` — `extractTextFromPdf()` (PDFParse class), `summarizeResume()` (Haiku), `getOrCreateResumeSummary()` with MD5 cache
+- [x] Resume cache hit/miss using `resume_cache.file_hash` column
+- [x] `src/routes/resume.ts` — `POST /api/resume/parse` with 5MB multer limit
+- [x] Resume route mounted in `index.ts` at `/api/resume`
+- [x] `interview.ts` — `loadInterviewAndTurns` selects `resume_text`
+- [x] `interview.ts` — `/start`, `/respond`, `/respond-voice` all pass `resumeSummary` to Claude
+- [x] `api.parseResume()` added to `frontend/lib/api.ts`
+- [x] Pre-interview screen added (`'pre-interview'` page state) — PDF drop zone, upload/done/error states
+- [x] "Start Interview" works with or without resume upload
+- [x] Job description field removed from create interview form (frontend + backend + types)
+- [x] System prompt updated — interview flow explicitly covers projects in turns 3–5
+- [x] Hard rules added to prompt — blocks experience-loop, forces project questions
+- [x] Graceful error shown for scanned/unreadable PDFs (empty text → throws user-facing error)
+- [x] Tested on a real resume — Alex references a specific project within turn 3 (verified)
+- [x] resume_cache verified saving correctly after fix (file_hash column)
 
 ---
 

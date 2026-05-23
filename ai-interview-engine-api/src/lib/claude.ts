@@ -27,7 +27,7 @@ function trimHistory(history: Turn[]): Turn[] {
 
 export async function getNextQuestion(params: {
   jobTitle: string
-  jobDescription: string
+  jobDescription?: string
   resumeSummary?: string
   stage?: InterviewStage
   history: Turn[]
@@ -57,7 +57,7 @@ export async function getNextQuestion(params: {
 // Seed message to kick off the interview without a real candidate answer
 export async function getOpeningQuestion(params: {
   jobTitle: string
-  jobDescription: string
+  jobDescription?: string
   resumeSummary?: string
 }): Promise<NextQuestion> {
   const { jobTitle, jobDescription, resumeSummary } = params

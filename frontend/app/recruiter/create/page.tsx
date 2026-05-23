@@ -11,7 +11,6 @@ export default function CreateInterviewPage() {
   const [form, setForm] = useState({
     candidate_email: '',
     job_title: '',
-    job_description: '',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -116,20 +115,6 @@ export default function CreateInterviewPage() {
               onChange={(e) => update('job_title', e.target.value)}
               placeholder="e.g. Senior Software Engineer"
               className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Job description
-            </label>
-            <textarea
-              required
-              rows={6}
-              value={form.job_description}
-              onChange={(e) => update('job_description', e.target.value)}
-              placeholder="Paste the job description here. The AI will use this to ask relevant interview questions."
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
             />
           </div>
 
