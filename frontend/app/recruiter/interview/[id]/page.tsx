@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { api } from '@/lib/api'
+import { EndInterviewButton } from '@/components/recruiter/EndInterviewButton'
 
 const STATUS_STYLES: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800',
@@ -65,6 +66,9 @@ export default async function InterviewDetailPage({ params }: { params: Promise<
             <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-700">
               {interview.score}/10
             </span>
+          )}
+          {interview.status === 'active' && (
+            <EndInterviewButton interviewId={interview.id} />
           )}
         </div>
       </header>

@@ -806,17 +806,38 @@ app/api/interview/
 
 **Important:** Run scoring asynchronously — don't block the "interview ended" response. Use a fire-and-forget pattern or Vercel background function.
 
+**Actual time taken:** ~2 hours
+
+**Decisions made:**
+- No separate `/score` route — scoring fires as fire-and-forget from `/end` after `res.json({ ok: true })`. Candidate sees completion screen instantly, recruiter sees score ~5s later on refresh.
+- Used Claude Sonnet 4.6 for scoring (same model as interview) — consistent quality
+- `overall_score` rounded to integer before saving — Claude sometimes returns floats
+- Skips scoring if fewer than 3 turns — not enough signal
+- EndInterviewButton added to transcript page — recruiter can end active interviews from their side (two-click confirm to prevent accidents)
+- Email invite sent via Brevo SMTP (nodemailer) on interview creation — fire-and-forget, doesn't block recruiter getting their link
+
+**Lessons learned:**
+- Gmail App Passwords consistently failed despite 2FA being enabled — switched to Brevo SMTP
+- Brevo requires IP blocking deactivated for SMTP keys (Security → Authorized IPs → Deactivate for SMTP keys)
+- Brevo `from` address must be a verified sender — use your registered email, not the SMTP login address
+- Gmail as `from` address with Brevo SMTP works fine and looks more legit to candidates
+
 #### Phase 6 Checklist
 
-- [ ] Scoring prompt written (dimensions: communication, technical depth, problem solving, cultural fit)
-- [ ] `POST /api/interview/score` route created
-- [ ] Scoring triggered automatically when interview ends
-- [ ] Scoring runs async — does not block end-interview response
-- [ ] Overall score (1–10) saved to `interviews` table
-- [ ] Score breakdown JSON saved to `score_breakdown` column
-- [ ] Recommendation (advance / hold / reject) saved
-- [ ] One-paragraph summary saved
-- [ ] Score card displayed on recruiter dashboard
+- [x] `src/lib/scorer.ts` — loads turns, builds transcript, calls Claude Sonnet 4.6, saves score
+- [x] Scoring covers all 4 dimensions + strengths + concerns + recommendation + summary
+- [x] JSON parse wrapped in try/catch — never crashes the server
+- [x] Skips scoring if fewer than 3 turns
+- [x] `overall_score` rounded to integer before saving
+- [x] `score` and `score_breakdown` saved to `interviews` table
+- [x] `/end` triggers `scoreInterview()` as fire-and-forget after responding
+- [x] `EndInterviewButton` client component added to transcript page (active interviews only)
+- [x] Two-click confirm on End Interview button (prevents accidents)
+- [x] `src/lib/email.ts` — Brevo SMTP via nodemailer, sends interview invite on create
+- [x] Email fires as fire-and-forget from `/create` — doesn't block recruiter response
+- [x] Tested: complete interview → wait 5s → refresh → score card appears
+- [x] Tested: recruiter ends interview from transcript page → scoring triggers
+- [x] Tested: candidate receives invite email with Start Interview button and link
 - [ ] Full score breakdown visible on transcript detail page
 
 ---

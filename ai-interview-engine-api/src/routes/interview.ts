@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase'
 import { getOpeningQuestion, getNextQuestion, type Turn } from '../lib/claude'
 import { transcribeAudio } from '../lib/deepgram'
 import { synthesizeSpeech } from '../lib/elevenlabs'
+import { scoreInterview } from '../lib/scorer'
+import { sendInterviewInvite } from '../lib/email'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage() })
@@ -72,6 +74,13 @@ router.post('/create', asyncHandler(async (req, res) => {
   }
 
   res.json({ interview_id: data.id })
+
+  // Send invite email in background — don't block recruiter getting their link
+  sendInterviewInvite({
+    candidateEmail: candidate_email,
+    jobTitle: job_title,
+    interviewId: data.id,
+  }).catch(err => console.error('[email] failed to send invite:', err.message))
 }))
 
 // ── POST /api/interview/start ──────────────────────────────────────────────────
@@ -277,7 +286,13 @@ router.post('/end', asyncHandler(async (req, res) => {
     return
   }
 
+  // Respond immediately — candidate sees "Interview Complete" without waiting for scoring
   res.json({ ok: true })
+
+  // Score in background — fire-and-forget, never blocks the response
+  scoreInterview(interview_id).catch(err =>
+    console.error('[scoring] unhandled error:', err.message)
+  )
 }))
 
 // ── GET /api/interview/:id ─────────────────────────────────────────────────────
