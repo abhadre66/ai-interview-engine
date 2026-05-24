@@ -6,7 +6,7 @@
 
 ## What It Does
 
-A recruiter creates an interview in 30 seconds — just a job title and candidate email. The candidate gets a link, uploads their resume, and talks to Alex — an AI interviewer that listens, follows up on what they actually said, and drills into their specific projects and skills. When it's done, the recruiter gets a full transcript and an AI-generated score card.
+A recruiter creates an interview in 30 seconds — just a job title and candidate email. The candidate gets an invite email with a direct link, uploads their resume, and talks to Alex — an AI interviewer that listens, follows up on what they actually said, and drills into their specific projects and skills. When it's done, the recruiter gets a full transcript and an AI-generated score card.
 
 No scheduling. No bias from tired interviewers. No waiting a week for feedback.
 
@@ -17,7 +17,7 @@ No scheduling. No bias from tired interviewers. No waiting a week for feedback.
 ```
 Recruiter logs in
   → fills in job title + candidate email
-  → gets a shareable link
+  → candidate receives invite email automatically
 
 Candidate opens the link
   → uploads their resume (optional)
@@ -29,8 +29,9 @@ Candidate opens the link
 
 Recruiter sees
   → full transcript
-  → score out of 10
-  → hire / hold / reject recommendation
+  → AI score out of 10 across 4 dimensions
+  → advance / hold / reject recommendation
+  → can end the interview from their side if needed
 ```
 
 ---
@@ -44,9 +45,11 @@ Recruiter sees
 | Database + Auth | Supabase (Postgres + Magic Link) |
 | AI Interviewer | Claude Sonnet 4.6 |
 | Resume Parsing | Claude Haiku 4.5 |
+| AI Scoring | Claude Sonnet 4.6 |
 | Speech-to-Text | Deepgram Nova-2 |
-| Text-to-Speech | Deepgram Aura (`aura-orion-en`) |
+| Text-to-Speech | Deepgram Aura |
 | PDF Extraction | pdf-parse v2 |
+| Email | Brevo SMTP (nodemailer) |
 | Styling | Tailwind CSS |
 | Frontend Deploy | Vercel |
 | Backend Deploy | Railway |
@@ -61,13 +64,16 @@ ai-interview-engine/
 │   ├── app/
 │   │   ├── login/                     # Magic link auth
 │   │   ├── recruiter/
-│   │   │   ├── dashboard/             # Interview list
-│   │   │   └── create/                # Create new interview (title + email)
+│   │   │   ├── dashboard/             # Interview list with scores
+│   │   │   ├── create/                # Create interview (title + email)
+│   │   │   └── interview/[id]/        # Transcript + score card viewer
 │   │   └── interview/[sessionId]/     # Candidate interview room
 │   ├── components/
-│   │   └── interview/
-│   │       ├── VoiceRecorder.tsx      # Mic capture + silence detection
-│   │       └── AudioPlayer.tsx        # Base64 audio → auto-play
+│   │   ├── interview/
+│   │   │   ├── VoiceRecorder.tsx      # Mic capture + silence detection
+│   │   │   └── AudioPlayer.tsx        # Base64 audio → auto-play
+│   │   └── recruiter/
+│   │       └── EndInterviewButton.tsx # Two-click end interview
 │   ├── lib/
 │   │   ├── api.ts                     # Typed backend client
 │   │   └── supabase/                  # Supabase browser + server clients
@@ -76,19 +82,19 @@ ai-interview-engine/
 ├── ai-interview-engine-api/           # Express backend (Railway)
 │   └── src/
 │       ├── lib/
-│       │   ├── claude.ts              # Interview chain (Claude API)
+│       │   ├── claude.ts              # Interview chain
 │       │   ├── prompts.ts             # System prompt builder
-│       │   ├── deepgram.ts            # STT + TTS via Deepgram
-│       │   ├── elevenlabs.ts          # TTS (Deepgram Aura under the hood)
-│       │   ├── resumeParser.ts        # PDF extraction + Haiku summarization
-│       │   └── supabase.ts            # Supabase service role client
+│       │   ├── scorer.ts              # AI scoring (post-interview)
+│       │   ├── deepgram.ts            # STT + TTS
+│       │   ├── resumeParser.ts        # PDF extraction + Haiku summary
+│       │   ├── email.ts               # Brevo invite emails
+│       │   └── supabase.ts            # Supabase service client
 │       └── routes/
 │           ├── interview.ts           # /start /respond /respond-voice /end
-│           ├── resume.ts              # /parse — PDF → summary → DB
-│           └── recruiter.ts          # /interviews list
+│           ├── resume.ts              # /parse
+│           └── recruiter.ts           # /interviews /interview/:id
 │
-├── .env                               # Single env file for both projects
-└── Pipeline.md                        # Full architecture + build roadmap
+└── .env                               # Single env file for both projects
 ```
 
 ---
@@ -101,6 +107,7 @@ ai-interview-engine/
 - A [Supabase](https://supabase.com) project
 - An [Anthropic](https://console.anthropic.com) API key
 - A [Deepgram](https://deepgram.com) API key
+- A [Brevo](https://brevo.com) account (free — for email invites)
 
 ### 1. Clone the repo
 
@@ -126,6 +133,11 @@ ANTHROPIC_API_KEY=your_anthropic_key
 
 # Deepgram (STT + TTS)
 DEEPGRAM_API_KEY=your_deepgram_key
+
+# Brevo (email invites)
+BREVO_SMTP_USER=your_brevo_smtp_login
+BREVO_SMTP_PASSWORD=your_brevo_smtp_key
+GMAIL_USER=your@gmail.com
 
 # Backend
 PORT=3001
@@ -205,7 +217,7 @@ Open `http://localhost:3000`
 
 ---
 
-## How the Interview Works
+## How It Works
 
 ### Voice pipeline (per turn)
 ```
@@ -222,20 +234,30 @@ Total latency: ~4–5 seconds
 ```
 Candidate uploads PDF
   → MD5 hash checked against resume_cache table
-  → Cache miss: pdf-parse v2 extracts text → Claude Haiku summarizes (~300 tokens)
+  → Cache miss: pdf-parse v2 extracts text → Claude Haiku summarizes
   → Summary saved to interviews.resume_text + resume_cache
   → All Claude calls receive resume summary in system prompt
 ```
 
 ### Interview flow (8 turns)
 ```
-Turn 1:   Alex greets + "Tell me about yourself"
-Turn 2:   Cross-references answer with resume — asks about a specific detail
-Turn 3:   Asks about a specific project (stack, contribution, outcome)
-Turn 4:   Digs into a technical challenge on that project
-Turn 5:   Pivots to a different project or side project
+Turn 1:    Alex greets + "Tell me about yourself"
+Turn 2:    Cross-references answer with resume — asks about a specific detail
+Turn 3:    Asks about a specific project (stack, contribution, outcome)
+Turn 4:    Digs into a technical challenge on that project
+Turn 5:    Pivots to a different project or side project
 Turns 6–7: Behavioral questions (STAR format)
-Turn 8:   Closing — candidate asks a question, Alex wraps up
+Turn 8:    Closing — candidate asks a question, Alex wraps up
+```
+
+### Scoring pipeline (after interview ends)
+```
+Interview ends → /end marks status completed → responds to candidate immediately
+  → scoreInterview() fires in background
+  → Loads all turns → builds transcript string
+  → Claude Sonnet 4.6 scores 4 dimensions + writes recommendation
+  → score + score_breakdown saved to interviews table (~5s total)
+  → Recruiter refreshes transcript page → score card appears
 ```
 
 ---
@@ -248,8 +270,8 @@ Turn 8:   Closing — candidate asks a question, Alex wraps up
 | 2 | AI Text Interview (Claude) | ✅ Done |
 | 3 | Voice Interview (Deepgram STT + TTS) | ✅ Done |
 | 4 | Resume-Aware Questions | ✅ Done |
-| 5 | Recruiter Transcript View | ⏳ Upcoming |
-| 6 | AI Scoring | ⏳ Upcoming |
+| 5 | Recruiter Transcript Viewer + Score Card | ✅ Done |
+| 6 | AI Scoring + Email Invites | ✅ Done |
 | 7 | Deploy + Polish | ⏳ Upcoming |
 
 ---
@@ -263,6 +285,7 @@ Turn 8:   Closing — candidate asks a question, Alex wraps up
 | Supabase | $0 |
 | Claude API | ~$10/mo |
 | Deepgram (STT + TTS) | ~$3/mo |
+| Brevo (email) | $0 |
 | **Total** | **~$13/mo** |
 
 ---

@@ -13,3 +13,6 @@ out/
 
 # misc
 .DS_Store
+
+# internal planning docs
+Pipeline.md
