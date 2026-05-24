@@ -28,6 +28,34 @@ export const api = {
     })
   },
 
+  getInterview(interview_id: string, recruiter_id: string) {
+    return apiFetch<{
+      interview: {
+        id: string
+        candidate_email: string
+        job_title: string
+        status: string
+        score: number | null
+        score_breakdown: {
+          dimensions: Record<string, { score: number; note: string }>
+          strengths: string[]
+          concerns: string[]
+          recommendation: string
+          summary: string
+        } | null
+        resume_text: string | null
+        created_at: string
+        completed_at: string | null
+      }
+      turns: {
+        turn_number: number
+        speaker: 'ai' | 'candidate'
+        text: string
+        timestamp: string
+      }[]
+    }>(`/api/recruiter/interview/${interview_id}?recruiter_id=${recruiter_id}`)
+  },
+
   listInterviews(recruiter_id: string, page = 0) {
     return apiFetch<{
       interviews: {

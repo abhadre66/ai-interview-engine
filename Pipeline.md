@@ -740,37 +740,51 @@ Turn 8:   Closing — candidate asks a question, Alex wraps up
 
 ---
 
-### Phase 5: Recruiter Dashboard (Day 8)
+### Phase 5: Recruiter Transcript Viewer (Day 8)
 
-**Goal:** Recruiter sees all interviews, can review transcripts.
+**Goal:** Recruiter can click into any interview and see the full transcript, score card, and candidate details.
 
-**Deliverables:** Recruiter can see exactly what happened in each interview.
+**Deliverables:** `/recruiter/interview/[id]` page showing header, score card (or placeholder), and full turn-by-turn transcript.
 
 **Folder structure additions:**
 ```
-app/recruiter/
-├── dashboard/page.tsx         ← interview list
-└── interview/[id]/page.tsx    ← transcript viewer
-app/api/recruiter/
-├── interviews/route.ts
-└── interview/[id]/route.ts
+ai-interview-engine-api/src/routes/
+└── recruiter.ts              ← UPDATED: added GET /interview/:id
+
+frontend/
+├── lib/api.ts                ← UPDATED: added getInterview()
+└── app/recruiter/
+    └── interview/
+        └── [id]/
+            └── page.tsx      ← NEW: transcript viewer
 ```
 
-**Estimated time:** 8 hours
+**Actual time taken:** ~1 hour
 
-**Common mistakes:**
-- Not paginating the interview list from day 1 — use Supabase `.range()` immediately
+**What was already done (free wins):**
+- Dashboard list page fully built with table, status badges, score column, "View" link
+- `GET /api/recruiter/interviews` with pagination already working
+- "View" link already pointed to `/recruiter/interview/[id]` — just needed the page
+
+**Decisions made:**
+- Score card renders conditionally — shows full breakdown if `score_breakdown` exists, clean placeholder if not (ready for Phase 6 to populate)
+- Ownership check on backend — `recruiter_id` query param validated against interview row, returns 403 if mismatch, frontend redirects to dashboard
+- Server component (no `useEffect`) — same pattern as dashboard, data fetched server-side
 
 #### Phase 5 Checklist
 
-- [ ] Interview list shows all interviews with status badges
-- [ ] Each row shows candidate name, job title, date, status
-- [ ] Clicking a row opens the transcript viewer
-- [ ] Transcript shows all turns in order, speaker labelled
-- [ ] AI-generated 3-bullet summary shown at top of transcript
-- [ ] Basic score visible on dashboard (even if just "8/10")
-- [ ] Pagination on interview list
-- [ ] Empty state shown for new recruiter accounts
+- [x] `GET /api/recruiter/interview/:id` added to `recruiter.ts` — returns interview row + all turns
+- [x] Route validates `recruiter_id` matches interview owner (403 on mismatch)
+- [x] `api.getInterview()` added to `frontend/lib/api.ts` with full typed response
+- [x] `frontend/app/recruiter/interview/[id]/page.tsx` created
+- [x] Header: candidate email, job title, status badge, score chip
+- [x] Score card placeholder when `score` is null
+- [x] Score card with dimension bars, strengths, concerns, summary when score exists
+- [x] Transcript renders all turns in order, Alex left / candidate right
+- [x] Timestamps shown under each bubble
+- [x] Empty state for pending interviews
+- [x] Back link to dashboard
+- [x] Tested: active interview → View → transcript loads correctly
 
 ---
 
